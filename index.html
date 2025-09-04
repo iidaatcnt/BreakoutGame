@@ -86,6 +86,28 @@
         button:hover {
             transform: scale(1.05);
         }
+        
+        .demo-mode {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #ff6b6b;
+            font-size: 20px;
+            font-weight: bold;
+            animation: blink 1s infinite;
+            z-index: 1000;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px 20px;
+            border-radius: 25px;
+            border: 2px solid #ff6b6b;
+        }
+        
+        @keyframes blink {
+            0% { opacity: 1; }
+            50% { opacity: 0.6; }
+            100% { opacity: 1; }
+        }
     </style>
 </head>
 <body>
@@ -98,6 +120,10 @@
         <canvas id="gameCanvas" width="800" height="600"></canvas>
         <div class="controls">
             <p>🖱️ マウスでパドルを操作 | スペースキーでゲーム開始・一時停止</p>
+        </div>
+        
+        <div id="demoText" class="demo-mode" style="display: none;">
+            🎮 DEMO MODE - マウスを動かしてプレイ開始 🎮
         </div>
         
         <div id="gameOverScreen" class="game-over">
@@ -115,7 +141,10 @@
             score: 0,
             lives: 3,
             gameRunning: false,
-            ballMoving: false
+            ballMoving: false,
+            isDemo: false,
+            lastUserInput: Date.now(),
+            demoActionTimer: 0
         };
         
         // パドル
@@ -172,6 +201,14 @@
         
         // マウス移動でパドル操作
         canvas.addEventListener('mousemove', (e) => {
+            // ユーザー入力を記録
+            gameState.lastUserInput = Date.now();
+            
+            // デモモード中の場合は終了
+            if (gameState.isDemo) {
+                stopDemo();
+            }
+            
             const rect = canvas.getBoundingClientRect();
             const mouseX = e.clientX - rect.left;
             paddle.x = mouseX - paddle.width / 2;
@@ -190,6 +227,15 @@
         
         // スペースキーでゲーム開始/一時停止
         document.addEventListener('keydown', (e) => {
+            // ユーザー入力を記録
+            gameState.lastUserInput = Date.now();
+            
+            // デモモード中の場合は終了
+            if (gameState.isDemo) {
+                stopDemo();
+                return;
+            }
+            
             if (e.code === 'Space') {
                 e.preventDefault();
                 if (!gameState.gameRunning) {
@@ -234,6 +280,25 @@
         
         // ゲーム更新
         function update() {
+            // デモモードのチェック
+            if (!gameState.gameRunning) {
+                checkDemoMode();
+            }
+            
+            // デモモード中はAIが操作
+            if (gameState.isDemo) {
+                updateDemoAI();
+                
+                // デモモード中のゲームオーバー時は自動再開
+                if (!gameState.gameRunning) {
+                    setTimeout(() => {
+                        restartGame();
+                        gameState.isDemo = true;
+                        startGame();
+                    }, 3000);
+                }
+            }
+            
             if (!gameState.gameRunning || !gameState.ballMoving) return;
             
             // ボール移動
@@ -300,10 +365,27 @@
             
             // パドル描画
             const gradient = ctx.createLinearGradient(paddle.x, paddle.y, paddle.x, paddle.y + paddle.height);
-            gradient.addColorStop(0, '#ff6b6b');
-            gradient.addColorStop(1, '#ee5a24');
+            
+            // デモモード中はパドルを光らせる
+            if (gameState.isDemo) {
+                const intensity = 0.5 + Math.sin(Date.now() / 200) * 0.3;
+                gradient.addColorStop(0, `rgba(255, 107, 107, ${intensity})`);
+                gradient.addColorStop(1, `rgba(238, 90, 36, ${intensity})`);
+                
+                // 光る輪郭を追加
+                ctx.shadowColor = '#ff6b6b';
+                ctx.shadowBlur = 15;
+                ctx.shadowOffsetX = 0;
+                ctx.shadowOffsetY = 0;
+            } else {
+                gradient.addColorStop(0, '#ff6b6b');
+                gradient.addColorStop(1, '#ee5a24');
+                ctx.shadowBlur = 0;
+            }
+            
             ctx.fillStyle = gradient;
             ctx.fillRect(paddle.x, paddle.y, paddle.width, paddle.height);
+            ctx.shadowBlur = 0; // シャドウをリセット
             
             // ボール描画
             ctx.beginPath();
@@ -371,12 +453,92 @@
             gameOverScreen.style.display = 'block';
         }
         
+        // デモモードのAI制御
+        function updateDemoAI() {
+            gameState.demoActionTimer++;
+            
+            // ボールが動いている場合のみパドルを移動
+            if (gameState.ballMoving) {
+                // ボールの位置を予測してパドルを移動
+                const ballPredictedX = ball.x + ball.dx * 10; // 10フレーム先を予測
+                const targetPaddleX = ballPredictedX - paddle.width / 2;
+                
+                // スムーズにパドルを移動
+                const paddleCenterX = paddle.x + paddle.width / 2;
+                const diff = ballPredictedX - paddleCenterX;
+                
+                if (Math.abs(diff) > 5) {
+                    const moveSpeed = Math.min(Math.abs(diff) * 0.1, paddle.speed);
+                    if (diff > 0) {
+                        paddle.x += moveSpeed;
+                    } else {
+                        paddle.x -= moveSpeed;
+                    }
+                }
+                
+                // パドルが画面外に出ないように制限
+                if (paddle.x < 0) paddle.x = 0;
+                if (paddle.x > canvas.width - paddle.width) {
+                    paddle.x = canvas.width - paddle.width;
+                }
+            } else {
+                // ボールが停止中は中央付近で待機
+                const centerX = canvas.width / 2 - paddle.width / 2;
+                const diff = centerX - paddle.x;
+                
+                if (Math.abs(diff) > 2) {
+                    paddle.x += diff * 0.05;
+                }
+                
+                // ボールをパドルの中央に保持
+                ball.x = paddle.x + paddle.width / 2;
+                
+                // 60フレームごとにボールを発射
+                if (gameState.demoActionTimer > 60 && gameState.gameRunning) {
+                    launchBall();
+                    gameState.demoActionTimer = 0;
+                }
+            }
+        }
+        
+        // デモモードのチェック
+        function checkDemoMode() {
+            if (gameState.isDemo) return;
+            
+            // 5秒間操作がなければデモモード開始
+            if (Date.now() - gameState.lastUserInput > 5000) {
+                startDemo();
+            }
+        }
+        
+        // デモモード開始
+        function startDemo() {
+            gameState.isDemo = true;
+            gameState.demoActionTimer = 0;
+            
+            if (!gameState.gameRunning) {
+                startGame();
+            }
+            
+            document.getElementById('demoText').style.display = 'block';
+        }
+        
+        // デモモード終了
+        function stopDemo() {
+            if (gameState.isDemo) {
+                gameState.isDemo = false;
+                document.getElementById('demoText').style.display = 'none';
+            }
+        }
+        
         // ゲーム再開
         function restartGame() {
             gameState.score = 0;
             gameState.lives = 3;
             gameState.gameRunning = false;
             gameState.ballMoving = false;
+            gameState.isDemo = false;
+            gameState.lastUserInput = Date.now();
             
             updateScore();
             updateLives();
@@ -385,6 +547,7 @@
             resetBall();
             
             document.getElementById('gameOverScreen').style.display = 'none';
+            document.getElementById('demoText').style.display = 'none';
         }
         
         // ゲームループ
